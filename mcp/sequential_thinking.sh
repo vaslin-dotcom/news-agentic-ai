@@ -1,0 +1,2 @@
+
+npx -y @modelcontextprotocol/server-sequential-thinking
