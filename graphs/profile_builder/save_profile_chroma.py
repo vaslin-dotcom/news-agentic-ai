@@ -10,9 +10,8 @@ Chunk types: professional | company | goals | interests
 import json
 from datetime import datetime
 from agent_utils import create_agent, invoke_agent
-from mcp_tools import run_with_chroma_tools
+from mcp_tools import get_chroma_tools
 from state import CollectionState
-import asyncio
 
 SYSTEM_PROMPT = """
 You are a vector database writer. Your job is to embed professional profile chunks
@@ -46,17 +45,14 @@ def embed_profile_chroma_node(state: CollectionState) -> dict:
     username = state["username"]
     fields = state.get("profile_fields", {})
     now = datetime.utcnow().isoformat()
-
-    async def _run(tools):
-        agent, smart_llm = create_agent(tools, SYSTEM_PROMPT, mode="think")
-        prompt = (
-            f"Username: {username}\nNow (UTC): {now}\n\n"
-            f"Profile fields:\n{json.dumps(fields, indent=2)}\n\n"
-            f"Embed all non-empty chunks into profile_vectors now."
-        )
-        messages = {"messages": [{"role": "user", "content": prompt}]}
-        return await invoke_agent_async(agent, smart_llm, tools, messages, SYSTEM_PROMPT)
-
-    asyncio.run(run_with_chroma_tools(_run))
+    tools = get_chroma_tools()
+    agent, smart_llm = create_agent(tools, SYSTEM_PROMPT, mode="think")
+    prompt = (
+        f"Username: {username}\nNow (UTC): {now}\n\n"
+        f"Profile fields:\n{json.dumps(fields, indent=2)}\n\n"
+        f"Embed all non-empty chunks into profile_vectors now."
+    )
+    messages = {"messages": [{"role": "user", "content": prompt}]}
+    invoke_agent(agent, smart_llm, tools, messages, SYSTEM_PROMPT)
     saved_ids = [f"{username}:{t}" for t in ["professional", "company", "goals", "interests"]]
     return {"chroma_ids": saved_ids, "errors": []}

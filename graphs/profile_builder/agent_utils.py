@@ -1,11 +1,6 @@
-"""
-agent_utils.py
---------------
-Creates and invokes ReAct agents with SmartLLM fallback.
-All invocations are async (ainvoke) to support async MCP tools.
-"""
-
+# agent_utils.py
 import asyncio
+import time
 from langgraph.prebuilt import create_react_agent
 from openai import RateLimitError, InternalServerError
 from llm import get_llm
@@ -19,14 +14,11 @@ def create_agent(tools: list, system_prompt: str, mode: str = "think"):
     return agent, smart_llm
 
 
-async def invoke_agent_async(
-    agent, smart_llm, tools, messages, system_prompt, mode="think"
-) -> dict:
+async def _invoke_async(agent, smart_llm, tools, messages, system_prompt) -> dict:
     try:
         return await agent.ainvoke(messages)
-
     except (RateLimitError, InternalServerError):
-        print("[Rate limit / 503] Primary failed — switching to alt LLM")
+        print("[Rate limit] switching to alt LLM")
         await asyncio.sleep(3)
         alt_agent = create_react_agent(
             smart_llm.alt.bind_tools(tools), tools, prompt=system_prompt
@@ -34,14 +26,13 @@ async def invoke_agent_async(
         try:
             return await alt_agent.ainvoke(messages)
         except (RateLimitError, InternalServerError):
-            print("[Alt failed] switching to fallback LLM")
+            print("[Alt failed] switching to fallback")
             await asyncio.sleep(3)
             fallback_agent = create_react_agent(
                 smart_llm.fallback.bind_tools(tools), tools, prompt=system_prompt
             )
-            try:
-                return await fallback_agent.ainvoke(messages)
-            except (RateLimitError, InternalServerError):
-                print("[All models failed] waiting 30s...")
-                await asyncio.sleep(30)
-                return await fallback_agent.ainvoke(messages)
+            return await fallback_agent.ainvoke(messages)
+
+
+def invoke_agent(agent, smart_llm, tools, messages, system_prompt, mode="think") -> dict:
+    return asyncio.run(_invoke_async(agent, smart_llm, tools, messages, system_prompt))

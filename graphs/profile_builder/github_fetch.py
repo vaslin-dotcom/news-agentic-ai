@@ -6,11 +6,9 @@ Uses agent_utils to handle SmartLLM fallback with create_react_agent.
 """
 
 import json
-import re
 from agent_utils import create_agent, invoke_agent
-from mcp_tools import run_with_github_tools
+from mcp_tools import get_github_tools
 from state import CollectionState
-import asyncio
 
 SYSTEM_PROMPT = """
 You are a GitHub data collector.
@@ -29,16 +27,12 @@ No explanation, no markdown, no backticks.
 
 
 def fetch_github_node(state: CollectionState) -> dict:
-    username = state["username"]
-
-    async def _run(tools):
-        agent, smart_llm = create_agent(tools, SYSTEM_PROMPT, mode="think")
-        messages = {"messages": [
-            {"role": "user", "content": f"Fetch all GitHub data for username: {username}"}
-        ]}
-        return await invoke_agent_async(agent, smart_llm, tools, messages, SYSTEM_PROMPT)
-
-    result = asyncio.run(run_with_github_tools(_run))
+    tools = get_github_tools()
+    agent, smart_llm = create_agent(tools, SYSTEM_PROMPT, mode="think")
+    messages = {"messages": [
+        {"role": "user", "content": f"Fetch all GitHub data for username: {state['username']}"}
+    ]}
+    result = invoke_agent(agent, smart_llm, tools, messages, SYSTEM_PROMPT)
     final_message = result["messages"][-1].content
 
     try:
@@ -48,5 +42,4 @@ def fetch_github_node(state: CollectionState) -> dict:
         github_raw = json.loads(match.group()) if match else {
             "profile": {}, "repos": [], "languages": [], "topics": []
         }
-
     return {"github_raw": github_raw}

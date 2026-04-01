@@ -31,6 +31,8 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from langgraph.graph import StateGraph, END
 from state import CollectionState
+import nest_asyncio
+nest_asyncio.apply()
 
 from github_fetch       import fetch_github_node
 from build_profile      import build_profile_node

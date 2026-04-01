@@ -7,9 +7,8 @@ Saves all chat_fields into SQLite using upsert_profile.
 
 import json
 from agent_utils import create_agent, invoke_agent
-from mcp_tools import run_with_sqlite_tools
+from mcp_tools import get_sqlite_tools
 from state import CollectionState
-import asyncio
 
 SYSTEM_PROMPT = """
 You are a database writer. Save personal profile fields into SQLite using upsert_profile.
@@ -27,12 +26,10 @@ Rules:
 
 def save_chat_sqlite_node(state: CollectionState) -> dict:
     fields = state.get("chat_fields", {})
-    tools  = asyncio.run(run_with_sqlite_tools())
+    tools = get_sqlite_tools()
     agent, smart_llm = create_agent(tools, SYSTEM_PROMPT, mode="think")
-
     messages = {"messages": [
         {"role": "user", "content": f"Save these personal profile fields to SQLite:\n\n{json.dumps(fields, indent=2)}"}
     ]}
-
-    invoke_agent(agent, smart_llm, tools, messages, SYSTEM_PROMPT, mode="think")
+    invoke_agent(agent, smart_llm, tools, messages, SYSTEM_PROMPT)
     return {"errors": []}

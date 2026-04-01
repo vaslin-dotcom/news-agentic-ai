@@ -1,38 +1,39 @@
-"""
-mcp_tools.py
-------------
-MCP session management. Keeps the session alive for the full agent run.
-Use run_with_*_tools() instead of get_*_tools() to avoid ClosedResourceError.
-"""
-
+# mcp_tools.py
 import asyncio
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
+MCP_SERVERS = {
+    "github": {
+        "command": "python",
+        "args": ["../../mcp/github.py"],
+        "transport": "stdio"
+    },
+    "sqlite": {
+        "command": "python",
+        "args": ["../../mcp/sqlite.py"],
+        "transport": "stdio"
+    },
+    "chroma": {
+        "command": "python",
+        "args": ["../../mcp/chroma.py"],
+        "transport": "stdio"
+    }
+}
 
-async def run_with_tools(script_path: str, coro_fn):
-    """
-    Spins up an MCP server, loads tools, and calls coro_fn(tools)
-    — all within the same session context so the session stays alive.
+async def _load_all_tools():
+    client = MultiServerMCPClient(MCP_SERVERS)
+    return await client.get_tools()
 
-    coro_fn: async callable that accepts a tools list and returns a result.
-    """
-    server_params = StdioServerParameters(command="python", args=[script_path])
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            tools = await load_mcp_tools(session)
-            return await coro_fn(tools)
+# Load once at module import — stays alive for entire run
+ALL_TOOLS = asyncio.run(_load_all_tools())
 
+def get_github_tools():
+    return [t for t in ALL_TOOLS if t.name in (
+        "get_user_profile", "get_repositories", "get_languages", "get_pinned_topics"
+    )]
 
-async def run_with_github_tools(coro_fn):
-    return await run_with_tools("../../mcp/github.py", coro_fn)
+def get_sqlite_tools():
+    return [t for t in ALL_TOOLS if t.name in ("upsert_profile",)]
 
-
-async def run_with_sqlite_tools(coro_fn):
-    return await run_with_tools("../../mcp/sqlite.py", coro_fn)
-
-
-async def run_with_chroma_tools(coro_fn):
-    return await run_with_tools("../../mcp/chroma.py", coro_fn)
+def get_chroma_tools():
+    return [t for t in ALL_TOOLS if t.name in ("upsert_embedding",)]

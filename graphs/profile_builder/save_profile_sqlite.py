@@ -7,9 +7,9 @@ Saves all profile_fields into SQLite using upsert_profile.
 
 import json
 from agent_utils import create_agent, invoke_agent
-from mcp_tools import run_with_sqlite_tools
+from mcp_tools import get_sqlite_tools
 from state import CollectionState
-import asyncio
+
 
 SYSTEM_PROMPT = """
 You are a database writer. Your job is to save profile fields into SQLite
@@ -25,13 +25,10 @@ Rules:
 
 def save_profile_sqlite_node(state: CollectionState) -> dict:
     fields = state.get("profile_fields", {})
-
-    async def _run(tools):
-        agent, smart_llm = create_agent(tools, SYSTEM_PROMPT, mode="think")
-        messages = {"messages": [
-            {"role": "user", "content": f"Save these profile fields to SQLite:\n\n{json.dumps(fields, indent=2)}"}
-        ]}
-        return await invoke_agent_async(agent, smart_llm, tools, messages, SYSTEM_PROMPT)
-
-    asyncio.run(run_with_sqlite_tools(_run))
+    tools = get_sqlite_tools()
+    agent, smart_llm = create_agent(tools, SYSTEM_PROMPT, mode="think")
+    messages = {"messages": [
+        {"role": "user", "content": f"Save these profile fields to SQLite:\n\n{json.dumps(fields, indent=2)}"}
+    ]}
+    invoke_agent(agent, smart_llm, tools, messages, SYSTEM_PROMPT)
     return {"errors": []}

@@ -10,9 +10,8 @@ Chunk types: personal | lifestyle | exclusions | extra
 import json
 from datetime import datetime
 from agent_utils import create_agent, invoke_agent
-from mcp_tools import run_with_chroma_tools
+from mcp_tools import get_chroma_tools
 from state import CollectionState
-import asyncio
 
 SYSTEM_PROMPT = """
 You are a vector database writer. Your job is to embed personal profile chunks
@@ -45,23 +44,18 @@ Rules:
 
 def embed_chat_chroma_node(state: CollectionState) -> dict:
     username = state["username"]
-    fields   = state.get("chat_fields", {})
-    tools    = asyncio.run(run_with_chroma_tools())
+    fields = state.get("chat_fields", {})
+    now = datetime.utcnow().isoformat()
+    tools = get_chroma_tools()
     agent, smart_llm = create_agent(tools, SYSTEM_PROMPT, mode="think")
-
-    now    = datetime.utcnow().isoformat()
     prompt = (
-        f"Username: {username}\n"
-        f"Now (UTC): {now}\n\n"
+        f"Username: {username}\nNow (UTC): {now}\n\n"
         f"Chat fields:\n{json.dumps(fields, indent=2)}\n\n"
         f"Embed all non-empty chunks into profile_vectors now."
     )
-
     messages = {"messages": [{"role": "user", "content": prompt}]}
-    invoke_agent(agent, smart_llm, tools, messages, SYSTEM_PROMPT, mode="think")
-
+    invoke_agent(agent, smart_llm, tools, messages, SYSTEM_PROMPT)
     saved_ids = [f"{username}:{t}" for t in ["personal", "lifestyle", "exclusions"]]
     if fields.get("extra"):
         saved_ids.append(f"{username}:extra")
-
     return {"chroma_ids": saved_ids, "errors": []}
