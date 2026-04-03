@@ -1,0 +1,384 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                        NEWS COLLECTOR GRAPH                                  ║
+║                                                                              ║
+║   Sources : DuckDuckGo News (no API key)                                     ║
+║   Storage : SQLite (structured) + Chroma (semantic vectors)                  ║
+║   Alert   : Telegram with inline feedback buttons                            ║
+║   Thinking: Sequential Thinking MCP (deep per-article reasoning)             ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  MCP SERVERS — loaded ONCE at import via MultiServerMCPClient                │
+│                                                                              │
+│  sqlite.py         chroma.py         ddg_news.py                            │
+│  telegram.py       sequential-thinking (npx)                                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  NODE 1 — load_profile_node                                                  ║
+║  Tools   : SQLite(get_profile) · Chroma(query_similar)                       ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  SQLite → get_profile                                                        ║
+║    Returns full flat key-value profile:                                      ║
+║      name, job, company, industry, location                                  ║
+║      skills, tech_stack, interests, goals                                    ║
+║      locality, languages_spoken, personal_interests                          ║
+║      daily_habits, lifestyle_context, news_reading_time                      ║
+║      news_exclusions, extra_*                                                ║
+║                                                                              ║
+║  Chroma → query_similar(profile_vectors, "professional background            ║
+║           skills interests lifestyle", n=7)                                  ║
+║    Returns ALL profile vector chunks:                                        ║
+║      professional · company · goals · interests                              ║
+║      personal · lifestyle · exclusions · extra                               ║
+║    These chunks are passed to deep_reasoning_node later                      ║
+║    so the LLM has rich semantic profile context per article                  ║
+║                                                                              ║
+║  ─────────────────────────────────────────────────────────────────────────  ║
+║  STATE OUT:                                                                  ║
+║    profile         → full flat dict from SQLite                              ║
+║    profile_chunks  → list of {id, document, metadata} from Chroma            ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+                                    │
+                                    ▼
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  NODE 2 — generate_queries_node                                              ║
+║  Tools   : none (pure LLM — think mode)                                      ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  Reads profile from state                                                    ║
+║  LLM generates 8–12 targeted DDG search queries covering:                    ║
+║                                                                              ║
+║  PROFESSIONAL           TECH INTERESTS          PERSONAL                     ║
+║  ─────────────────────  ──────────────────────  ─────────────────────────   ║
+║  "Infosys AI news"      "LangGraph agents"      "IPL cricket 2025"           ║
+║  "Infosys Mysore"       "RAG systems 2025"      "Tamil cinema releases"      ║
+║  "IT sector layoffs"    "neuromorphic compute"  "Malayalam movies 2025"      ║
+║  "AI/ML engineer jobs"  "autonomous agents"     "Karnataka news today"       ║
+║                         "LangChain updates"                                  ║
+║                                                                              ║
+║  Queries are derived ONLY from profile — no hardcoding                       ║
+║  Different profile → completely different queries                            ║
+║                                                                              ║
+║  ─────────────────────────────────────────────────────────────────────────  ║
+║  STATE OUT:                                                                  ║
+║    search_queries → list[str]  (8–12 queries)                                ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+                                    │
+                                    ▼
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  NODE 3 — fetch_news_node                                                    ║
+║  Tools   : DDG(fetch_news) · SQLite(url_exists)                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  For each query in search_queries:                                           ║
+║    DDG → fetch_news(query, max_results=20)                                   ║
+║    Returns: title, url, summary, source, published_at                        ║
+║                                                                              ║
+║  After all queries complete:                                                 ║
+║    Deduplicate by URL across all query results                               ║
+║                                                                              ║
+║  For each unique URL:                                                        ║
+║    SQLite → url_exists(url)                                                  ║
+║      exists  → SKIP  (already processed in a previous run)                  ║
+║      new     → KEEP                                                          ║
+║                                                                              ║
+║  Result: clean list of unseen articles only                                  ║
+║                                                                              ║
+║  ─────────────────────────────────────────────────────────────────────────  ║
+║  STATE OUT:                                                                  ║
+║    raw_articles → list[dict]                                                 ║
+║      each: title, url, summary, source, published_at                         ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+                                    │
+                                    ▼
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  NODE 4 — relevance_filter_node                                              ║
+║  Tools   : Chroma(query_similar)                                             ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  For each raw article:                                                       ║
+║                                                                              ║
+║  STEP 1 — Profile similarity                                                 ║
+║    Chroma → query_similar(                                                   ║
+║      collection = profile_vectors,                                           ║
+║      query_text = title + " " + summary,                                     ║
+║      n = 3                                                                   ║
+║    )                                                                         ║
+║    → base_score    = top similarity score (0.0–1.0)                          ║
+║    → top_chunks    = top 3 matching profile chunks                           ║
+║                      (carried forward to reasoning node)                     ║
+║                                                                              ║
+║  STEP 2 — Feedback penalty                                                   ║
+║    Chroma → query_similar(                                                   ║
+║      collection = feedback_vectors,                                          ║
+║      query_text = title + " " + summary,                                     ║
+║      n = 3                                                                   ║
+║    )                                                                         ║
+║    → for each match:                                                         ║
+║        signal = "skip"        → penalty = 0.4                               ║
+║        signal = "irrelevant"  → penalty = 0.2                               ║
+║    → apply max penalty found                                                 ║
+║                                                                              ║
+║  STEP 3 — Hard exclusion check                                               ║
+║    if article text overlaps news_exclusions (e.g "gossip")                  ║
+║    → DROP immediately, no further processing                                 ║
+║                                                                              ║
+║  STEP 4 — Final score + threshold                                            ║
+║    final_score = base_score - penalty                                        ║
+║    final_score >= 0.3  → KEEP                                                ║
+║    final_score <  0.3  → DROP                                                ║
+║                                                                              ║
+║  ─────────────────────────────────────────────────────────────────────────  ║
+║  STATE OUT:                                                                  ║
+║    filtered_articles → list[dict]                                            ║
+║      each: + similarity_score                                                ║
+║              feedback_penalty                                                ║
+║              matching_profile_chunks  (top 3)                                ║
+║              similar_feedback_articles (for reasoning awareness)             ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+                                    │
+                                    ▼
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  NODE 5 — deep_reasoning_node                                                ║
+║  Tools   : SeqThinking(think) · Chroma(query_similar) · SQLite(execute_query)║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  Processes ONE article at a time — full sequential reasoning per article     ║
+║                                                                              ║
+║  ┌─────────────────────────────────────────────────────────────────────┐     ║
+║  │  For each filtered article:                                         │     ║
+║  │                                                                     │     ║
+║  │  PRE-STEP — Find semantically connected past articles               │     ║
+║  │    Chroma → query_similar(                                          │     ║
+║  │      collection = article_vectors,                                  │     ║
+║  │      query_text = title + summary,                                  │     ║
+║  │      n = 5                                                          │     ║
+║  │    )                                                                │     ║
+║  │    → returns top 5 past article IDs (URLs)                         │     ║
+║  │                                                                     │     ║
+║  │    SQLite → execute_query(                                          │     ║
+║  │      "SELECT title, summary, urgency, reasoning,                   │     ║
+║  │       published_at FROM articles WHERE url IN (?,...)"             │     ║
+║  │    )                                                                │     ║
+║  │    → fetches full rows for those 5 articles                        │     ║
+║  │    → these become the "connection context"                         │     ║
+║  │                                                                     │     ║
+║  │  SEQUENTIAL THINKING CHAIN                                         │     ║
+║  │  LLM receives:                                                      │     ║
+║  │    • Full profile (from state)                                      │     ║
+║  │    • Current article (title + summary + source + date)             │     ║
+║  │    • Top 3 matching profile chunks (from filter step)              │     ║
+║  │    • Top 5 connected past articles (title + summary + urgency)     │     ║
+║  │    • Feedback penalty + similar skipped articles                   │     ║
+║  │                                                                     │     ║
+║  │  think("What is this article actually about?")                     │     ║
+║  │    ↓                                                                │     ║
+║  │  think("Which dimensions of this person's life does it touch?      │     ║
+║  │         Professional? Personal? Location? Tech interests?")        │     ║
+║  │    ↓                                                                │     ║
+║  │  think("He is an AI/ML engineer at Infosys Mysore — does          │     ║
+║  │         his specific role, company, or location make               │     ║
+║  │         this more or less relevant?")                              │     ║
+║  │    ↓                                                                │     ║
+║  │  think("Do any of the 5 past articles connect to this?             │     ║
+║  │         Is the combined picture more urgent than                   │     ║
+║  │         this article alone?")                                      │     ║
+║  │    ↓                                                                │     ║
+║  │  think("User previously skipped similar content —                  │     ║
+║  │         does that lower urgency despite the match?")               │     ║
+║  │    ↓                                                                │     ║
+║  │  think("What is the real-world impact on this specific             │     ║
+║  │         person — not people in general?")                          │     ║
+║  │    ↓                                                                │     ║
+║  │  think("Final verdict:                                             │     ║
+║  │         relevance_score 0.0–1.0                                    │     ║
+║  │         urgency 1–5                                                │     ║
+║  │         reasoning (2–3 sentences, personal)                        │     ║
+║  │         connected_to [{title, published_at}] or []")              │     ║
+║  └─────────────────────────────────────────────────────────────────────┘     ║
+║                                                                              ║
+║  URGENCY SCALE                                                               ║
+║  ─────────────────────────────────────────────────────────────────────────  ║
+║  1 → mildly interesting, no action needed                                    ║
+║  2 → worth knowing, save but don't alert                                     ║
+║  3 → notable — send alert                                                    ║
+║  4 → directly affects your work or life — send alert                         ║
+║  5 → act on this now — send alert                                            ║
+║                                                                              ║
+║  ─────────────────────────────────────────────────────────────────────────  ║
+║  STATE OUT:                                                                  ║
+║    scored_articles → list[dict]                                              ║
+║      each: + urgency · relevance_score · reasoning · connected_to            ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+                                    │
+                    ┌───────────────┴────────────────┐
+                    │                                │
+                    ▼                                ▼
+╔═══════════════════════════════╗  ╔════════════════════════════════╗
+║  NODE 6a — save_node          ║  ║  NODE 6b — embed_node          ║
+║  Tools: SQLite                ║  ║  Tools: Chroma                 ║
+╠═══════════════════════════════╣  ╠════════════════════════════════╣
+║                               ║  ║                                ║
+║  For ALL scored articles:     ║  ║  For ALL scored articles:      ║
+║  → save_article(              ║  ║  → upsert_embedding(           ║
+║      url, title, source,      ║  ║      collection=               ║
+║      summary, published_at,   ║  ║        "article_vectors",      ║
+║      relevance_score,         ║  ║      id  = article url,        ║
+║      urgency, reasoning,      ║  ║      doc = title + summary,    ║
+║      embedding_id = url       ║  ║      metadata = {              ║
+║    )                          ║  ║        source,                 ║
+║                               ║  ║        published_at,           ║
+║  For urgency >= 3 only:       ║  ║        urgency                 ║
+║  → save_alert(                ║  ║      }                         ║
+║      article_id,              ║  ║    )                           ║
+║      urgency,                 ║  ║                                ║
+║      reasoning                ║  ║  Embedding auto-generated      ║
+║    )                          ║  ║  by Chroma MCP internally      ║
+║                               ║  ║  (all-MiniLM-L6-v2)           ║
+╚═══════════════════════════════╝  ╚════════════════════════════════╝
+                    │                                │
+                    └───────────────┬────────────────┘
+                                    │
+                                    ▼
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  NODE 7 — alert_node                                                         ║
+║  Tools   : Telegram(send_alert)                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  Filters scored_articles where urgency >= 3                                  ║
+║                                                                              ║
+║  For each alert article:                                                     ║
+║  → Telegram send_alert(                                                      ║
+║      article    = {title, url, summary, source, published_at},               ║
+║      urgency    = 4,                                                         ║
+║      reasoning  = "...",                                                     ║
+║      article_id = SQLite row ID,                                             ║
+║      connected_to = [{title, published_at}, ...]                             ║
+║    )                                                                         ║
+║                                                                              ║
+║  Message format in Telegram:                                                 ║
+║  ┌─────────────────────────────────────────────────────────────┐             ║
+║  │ 📰 News Alert — Urgency 4/5 🔴🔴🔴🔴⚪                      │             ║
+║  │                                                             │             ║
+║  │ Infosys announces 10% workforce reduction in AI teams       │             ║
+║  │ Economic Times · 2026-04-02                                 │             ║
+║  │                                                             │             ║
+║  │ Infosys is cutting AI roles across delivery centres...      │             ║
+║  │                                                             │             ║
+║  │ 💡 Why this matters to you:                                 │             ║
+║  │ You are an AI/ML engineer at Infosys Mysore. This           │             ║
+║  │ directly affects your team and role stability.              │             ║
+║  │                                                             │             ║
+║  │ 🔗 Connected to:                                            │             ║
+║  │   • Infosys Q3 results miss estimates (2026-03-28)          │             ║
+║  │   • IT sector hiring freeze deepens (2026-03-15)            │             ║
+║  │                                                             │             ║
+║  │ 🌐 Read full article                                        │             ║
+║  │                                                             │             ║
+║  │  ✅ Useful  │  ❌ Not Useful  │  🚫 Skip Topic              │             ║
+║  └─────────────────────────────────────────────────────────────┘             ║
+║                                                                              ║
+║  ─────────────────────────────────────────────────────────────────────────  ║
+║  STATE OUT: —                                                                ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+                                    │
+                                   END
+
+
+════════════════════════════════════════════════════════════════════════════════
+  FEEDBACK HANDLER  (separate always-on background process)
+════════════════════════════════════════════════════════════════════════════════
+
+  Runs continuously alongside the graph (not part of it)
+  Tools: Telegram(get_callbacks) · SQLite(save_feedback) · Chroma(upsert_embedding)
+
+  Loop every 30s:
+    │
+    ├── Telegram → get_callbacks()
+    │     Parses lines: signal=skip  article_id=42  from=@vaslin
+    │
+    ├── For EACH callback:
+    │     SQLite → save_feedback(article_id, signal, from_user)
+    │
+    └── If signal == "irrelevant" OR "skip":
+          SQLite → execute_query(
+            "SELECT title, summary, url FROM articles WHERE id = ?"
+          )
+          Chroma → upsert_embedding(
+            collection = "feedback_vectors",
+            id         = "{url}:{signal}",
+            document   = title + " " + summary,
+            metadata   = {signal, username, received_at}
+          )
+          → Now influences future relevance_filter_node runs
+          → "skip" applies 0.4 penalty · "irrelevant" applies 0.2 penalty
+
+
+════════════════════════════════════════════════════════════════════════════════
+  HOW THE SYSTEM IMPROVES OVER TIME
+════════════════════════════════════════════════════════════════════════════════
+
+  Run 1    : feedback_vectors empty → no penalties
+             article_vectors empty  → no connections found
+
+  Run 5    : a few feedback signals → light penalties on similar topics
+             article_vectors growing → some connections found in reasoning
+
+  Run 30   : rich feedback history → filter drops most irrelevant articles
+             article_vectors dense  → reasoning finds multi-hop connections
+             alerts feel personal   → system has learned your exact taste
+
+  Self-corrects without any manual tuning.
+  Only improves. Never degrades.
+
+
+════════════════════════════════════════════════════════════════════════════════
+  COMPLETE MCP SERVER LIST
+════════════════════════════════════════════════════════════════════════════════
+
+  mcp/sqlite.py              ✅ built   tools: get_profile, save_article,
+                                               save_alert, save_feedback,
+                                               url_exists, execute_query,
+                                               upsert_profile, get_articles
+
+  mcp/chroma.py              ✅ built   tools: upsert_embedding, query_similar,
+                                               delete_embedding, list_collections
+                                               (embedding auto-generated internally)
+
+  mcp/ddg_news.py            ✅ built   tools: fetch_news
+
+  mcp/telegram.py            ✅ built   tools: send_alert (with buttons),
+                                               send_message, get_updates,
+                                               get_callbacks, get_chat_id
+
+  mcp/github.py              ✅ built   (profile builder only, not used here)
+
+  sequential-thinking        ❌ npm     npx @modelcontextprotocol/
+                                        server-sequential-thinking
+                                        → add to MCP_SERVERS in mcp_tools.py
+
+
+════════════════════════════════════════════════════════════════════════════════
+  STATE SCHEMA
+════════════════════════════════════════════════════════════════════════════════
+
+  class NewsState(TypedDict):
+      profile            : dict         # full flat profile from SQLite
+      profile_chunks     : list[dict]   # all profile_vectors from Chroma
+      search_queries     : list[str]    # LLM-generated DDG queries
+      raw_articles       : list[dict]   # fetched + deduped + unseen
+      filtered_articles  : list[dict]   # passed relevance filter
+                                        #   + similarity_score
+                                        #   + feedback_penalty
+                                        #   + matching_profile_chunks
+                                        #   + similar_feedback_articles
+      scored_articles    : list[dict]   # after deep reasoning
+                                        #   + urgency
+                                        #   + relevance_score
+                                        #   + reasoning
+                                        #   + connected_to
+      alert_articles     : list[dict]   # urgency >= 3 (subset of scored)
+      errors             : Annotated[list[str], operator.add]
