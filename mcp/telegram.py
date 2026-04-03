@@ -4,18 +4,23 @@ Telegram MCP Server (FastMCP version)
 Two-way Telegram integration for the news agent.
 
 Tools exposed:
-  - send_alert     : send a formatted news alert to your chat
-  - send_message   : send any plain text / HTML message
-  - get_updates    : poll for new messages / feedback replies
-  - get_chat_id    : one-time setup helper to find your chat ID
+  - send_alert       : formatted news alert WITH inline feedback buttons
+  - send_message     : plain text / HTML message
+  - get_updates      : poll for new text messages
+  - get_callbacks    : poll for inline button taps (feedback signals)
+  - get_chat_id      : one-time setup helper
 
-Setup (run once before anything else):
-  1. Message @BotFather on Telegram → /newbot → copy the token
-  2. Send your new bot any message (so it has an update to return)
-  3. python mcps/telegram_mcp.py --get-chat-id
-  4. Copy both values into your .env:
-       TELEGRAM_BOT_TOKEN=...
-       TELEGRAM_CHAT_ID=...
+Feedback buttons on each alert:
+  ✅ Useful  |  ❌ Not Useful  |  🚫 Skip Topic
+
+Callback data format: "{signal}:{article_id}"
+  e.g. "useful:42", "irrelevant:17", "skip:9"
+
+Setup:
+  1. Message @BotFather → /newbot → copy token
+  2. Send bot any message
+  3. python mcp/telegram.py --get-chat-id
+  4. Add to .env: TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=...
 """
 
 import asyncio
@@ -39,16 +44,13 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 API_BASE  = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# Tracks the last seen update_id so get_updates never returns duplicates
 _last_update_id: int = 0
 
-
 # ---------------------------------------------------------------------------
-# Low-level helpers (sync — called inside async via asyncio.to_thread)
+# Low-level helpers
 # ---------------------------------------------------------------------------
 
 def _post_sync(endpoint: str, payload: dict) -> dict:
-    """Synchronous POST to Telegram Bot API."""
     if not BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set in .env")
     with httpx.Client(timeout=15.0) as client:
@@ -61,7 +63,6 @@ def _post_sync(endpoint: str, payload: dict) -> dict:
 
 
 def _get_sync(endpoint: str, params: dict = None) -> dict:
-    """Synchronous GET from Telegram Bot API."""
     if not BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set in .env")
     with httpx.Client(timeout=15.0) as client:
@@ -73,24 +74,47 @@ def _get_sync(endpoint: str, params: dict = None) -> dict:
     return data
 
 
-def _build_alert_text(article: dict, urgency: int, reasoning: str) -> str:
-    """Format a news alert as HTML for Telegram."""
+def _build_alert_text(
+    article: dict,
+    urgency: int,
+    reasoning: str,
+    connected_to: list = None,
+) -> str:
     urgency_bar = "🔴" * urgency + "⚪" * (5 - urgency)
-    title       = article.get("title", "No title")
-    source      = article.get("source", "")
-    date        = article.get("published_at", "")[:10]
-    summary     = article.get("summary", "")[:300]
-    url         = article.get("url", "")
+    title   = article.get("title", "No title")
+    source  = article.get("source", "")
+    date    = article.get("published_at", "")[:10]
+    summary = article.get("summary", "")[:300]
+    url     = article.get("url", "")
 
-    return (
-        f"<b>News Alert</b> — Urgency {urgency}/5 {urgency_bar}\n\n"
+    text = (
+        f"<b>📰 News Alert</b> — Urgency {urgency}/5 {urgency_bar}\n\n"
         f"<b>{title}</b>\n"
         f"<i>{source}</i> · {date}\n\n"
         f"{summary}...\n\n"
-        f"<b>Why this matters to you:</b>\n{reasoning}\n\n"
-        f'<a href="{url}">Read full article</a>\n\n'
-        f"<i>Reply 'skip' to mark as not relevant.</i>"
+        f"<b>💡 Why this matters to you:</b>\n{reasoning}\n"
     )
+
+    if connected_to:
+        text += "\n<b>🔗 Connected to:</b>\n"
+        for past in connected_to[:3]:
+            past_title = past.get("title", "")
+            past_date  = past.get("published_at", "")[:10]
+            if past_title:
+                text += f"  • {past_title} ({past_date})\n"
+
+    text += f'\n<a href="{url}">🌐 Read full article</a>'
+    return text
+
+
+def _build_keyboard(article_id: int) -> dict:
+    return {
+        "inline_keyboard": [[
+            {"text": "✅ Useful",      "callback_data": f"useful:{article_id}"},
+            {"text": "❌ Not Useful",  "callback_data": f"irrelevant:{article_id}"},
+            {"text": "🚫 Skip Topic", "callback_data": f"skip:{article_id}"},
+        ]]
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -98,29 +122,39 @@ def _build_alert_text(article: dict, urgency: int, reasoning: str) -> str:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def send_alert(article: dict, urgency: int, reasoning: str) -> str:
+async def send_alert(
+    article: dict,
+    urgency: int,
+    reasoning: str,
+    article_id: int,
+    connected_to: list = None,
+) -> str:
     """
-    Send a formatted news alert to your Telegram chat.
-    Includes title, source, summary, urgency score, and chain-of-thought reasoning.
+    Send a formatted news alert with inline ✅ ❌ 🚫 feedback buttons.
+    Button taps are readable via get_callbacks tool.
 
-    :param article: Dict with keys: title, url, summary, source, published_at
-    :param urgency: Urgency score 1 (low) to 5 (critical)
-    :param reasoning: Explanation of why this article matters to you
+    :param article: Dict with title, url, summary, source, published_at
+    :param urgency: Score 1–5
+    :param reasoning: Why this matters to the user (from sequential thinking)
+    :param article_id: SQLite article row ID — links button tap back to article
+    :param connected_to: Optional list of connected past articles [{title, published_at}]
     """
     if not CHAT_ID:
-        raise RuntimeError("TELEGRAM_CHAT_ID not set. Run get_chat_id first.")
+        raise RuntimeError("TELEGRAM_CHAT_ID not set.")
 
-    urgency = max(1, min(5, int(urgency)))
-    text = _build_alert_text(article, urgency, reasoning)
+    urgency  = max(1, min(5, int(urgency)))
+    text     = _build_alert_text(article, urgency, reasoning, connected_to or [])
+    keyboard = _build_keyboard(article_id)
 
     await asyncio.to_thread(_post_sync, "sendMessage", {
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
+        "chat_id":                  CHAT_ID,
+        "text":                     text,
+        "parse_mode":               "HTML",
         "disable_web_page_preview": False,
+        "reply_markup":             keyboard,
     })
 
-    return f"Alert sent: {article.get('title', 'unknown')}"
+    return f"Alert sent: '{article.get('title', 'unknown')}' (article_id={article_id})"
 
 
 @mcp.tool()
@@ -129,14 +163,14 @@ async def send_message(text: str, parse_mode: str = "HTML") -> str:
     Send a plain text or HTML message to your Telegram chat.
 
     :param text: Message content. Supports HTML tags like <b>, <i>, <a href>.
-    :param parse_mode: 'HTML' or 'Markdown'. Default is 'HTML'.
+    :param parse_mode: 'HTML' or 'Markdown'. Default HTML.
     """
     if not CHAT_ID:
         raise RuntimeError("TELEGRAM_CHAT_ID not set.")
 
     await asyncio.to_thread(_post_sync, "sendMessage", {
-        "chat_id": CHAT_ID,
-        "text": text,
+        "chat_id":    CHAT_ID,
+        "text":       text,
         "parse_mode": parse_mode,
     })
     return "Message sent."
@@ -145,11 +179,10 @@ async def send_message(text: str, parse_mode: str = "HTML") -> str:
 @mcp.tool()
 async def get_updates(limit: int = 10) -> str:
     """
-    Poll Telegram for new messages sent to your bot.
-    Automatically deduplicates — only returns messages since the last call.
-    Use this in the feedback node to check for 'skip' replies.
+    Poll for new TEXT messages sent to your bot.
+    Auto-deduplicates — only returns messages since last call.
 
-    :param limit: Max number of updates to fetch. Default 10.
+    :param limit: Max updates to fetch. Default 10.
     """
     global _last_update_id
 
@@ -157,7 +190,7 @@ async def get_updates(limit: int = 10) -> str:
     if _last_update_id > 0:
         params["offset"] = _last_update_id + 1
 
-    data = await asyncio.to_thread(_get_sync, "getUpdates", params)
+    data    = await asyncio.to_thread(_get_sync, "getUpdates", params)
     updates = data.get("result", [])
 
     if not updates:
@@ -179,23 +212,86 @@ async def get_updates(limit: int = 10) -> str:
 
 
 @mcp.tool()
-async def get_chat_id() -> str:
+async def get_callbacks(limit: int = 10) -> str:
     """
-    One-time setup helper. Fetches recent Telegram updates to find your chat ID.
-    Send any message to your bot first, then call this tool.
-    Copy the printed chat ID into your .env as TELEGRAM_CHAT_ID.
+    Poll for inline button taps (callback queries) from feedback buttons.
+    Auto-acknowledges each tap so Telegram removes the loading spinner.
+    Silently skips expired acknowledgements (Telegram gives only ~60s to ack).
+    Auto-deduplicates — only returns taps since last call.
+
+    Returns one line per tap:
+      signal=useful      article_id=42  from=@username  date=2026-04-02 08:00
+      signal=skip        article_id=17  from=@username  date=2026-04-02 08:01
+
+    Signals: useful | irrelevant | skip
+
+    :param limit: Max updates to fetch. Default 10.
     """
-    data = await asyncio.to_thread(_get_sync, "getUpdates", {"limit": 5, "timeout": 0})
+    global _last_update_id
+
+    params = {"limit": limit, "timeout": 0}
+    if _last_update_id > 0:
+        params["offset"] = _last_update_id + 1
+
+    data    = await asyncio.to_thread(_get_sync, "getUpdates", params)
     updates = data.get("result", [])
 
     if not updates:
-        return (
-            "No updates found.\n"
-            "Send any message to your bot on Telegram first, then call this again."
+        return "No new callbacks."
+
+    _last_update_id = max(u["update_id"] for u in updates)
+
+    lines = []
+    for update in updates:
+        cb = update.get("callback_query")
+        if not cb:
+            continue
+
+        callback_data = cb.get("data", "")
+        callback_id   = cb.get("id", "")
+        user          = cb.get("from", {}).get("username", "unknown")
+        date          = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        if ":" not in callback_data:
+            continue
+
+        signal, article_id = callback_data.split(":", 1)
+
+        # Acknowledge the button tap — removes the spinner in Telegram
+        # Wrapped in try/except because Telegram only allows ~60s to ack.
+        # After that it returns 400. The callback data is still valid,
+        # so we continue processing even if ack fails.
+        try:
+            await asyncio.to_thread(_post_sync, "answerCallbackQuery", {
+                "callback_query_id": callback_id,
+                "text": f"Marked as: {signal}",
+            })
+        except Exception:
+            # Expired callback ID — safe to ignore, data is still usable
+            pass
+
+        lines.append(
+            f"signal={signal}  article_id={article_id}  "
+            f"from=@{user}  date={date}"
         )
 
+    return "\n".join(lines) if lines else "No callbacks found."
+
+@mcp.tool()
+async def get_chat_id() -> str:
+    """
+    One-time setup helper. Fetches recent updates to find your chat ID.
+    Send any message to your bot on Telegram first, then call this tool.
+    Copy the printed chat ID into your .env as TELEGRAM_CHAT_ID.
+    """
+    data    = await asyncio.to_thread(_get_sync, "getUpdates", {"limit": 5, "timeout": 0})
+    updates = data.get("result", [])
+
+    if not updates:
+        return "No updates found. Send a message to your bot on Telegram first."
+
     lines = ["Found chats:\n"]
-    seen = set()
+    seen  = set()
     for update in updates:
         chat = update.get("message", {}).get("chat", {})
         cid  = chat.get("id")
@@ -208,64 +304,16 @@ async def get_chat_id() -> str:
             f"  Username : @{chat.get('username', 'N/A')}\n"
             f"  → Add to .env: TELEGRAM_CHAT_ID={cid}\n"
         )
-
     return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# Direct Python API (called from LangGraph nodes — no MCP protocol overhead)
-# ---------------------------------------------------------------------------
-
-async def alert(article: dict, urgency: int, reasoning: str):
-    """Send a formatted alert directly from a node."""
-    if not CHAT_ID:
-        raise RuntimeError("TELEGRAM_CHAT_ID not set.")
-    text = _build_alert_text(article, max(1, min(5, urgency)), reasoning)
-    await asyncio.to_thread(_post_sync, "sendMessage", {
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-    })
-
-
-async def get_new_messages(limit: int = 10) -> list[dict]:
-    """
-    Poll for new messages. Returns list of {text, from_user, date} dicts.
-    Called by the feedback node to detect 'skip' replies.
-    """
-    global _last_update_id
-
-    params = {"limit": limit, "timeout": 0}
-    if _last_update_id > 0:
-        params["offset"] = _last_update_id + 1
-
-    data = await asyncio.to_thread(_get_sync, "getUpdates", params)
-    updates = data.get("result", [])
-    if not updates:
-        return []
-
-    _last_update_id = max(u["update_id"] for u in updates)
-
-    messages = []
-    for update in updates:
-        msg  = update.get("message", {})
-        text = msg.get("text", "").strip()
-        if text:
-            messages.append({
-                "text":      text,
-                "from_user": msg.get("from", {}).get("username", ""),
-                "date":      msg.get("date", 0),
-            })
-    return messages
-
-
-# ---------------------------------------------------------------------------
-# CLI helper: python mcps/telegram_mcp.py --get-chat-id
+# CLI helper
 # ---------------------------------------------------------------------------
 
 async def _cli_get_chat_id():
     print("Fetching updates to find your chat ID...")
-    data = await asyncio.to_thread(_get_sync, "getUpdates", {"limit": 5, "timeout": 0})
+    data    = await asyncio.to_thread(_get_sync, "getUpdates", {"limit": 5, "timeout": 0})
     updates = data.get("result", [])
     if not updates:
         print("No updates found. Send a message to your bot on Telegram first.")

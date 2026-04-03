@@ -75,6 +75,20 @@ def _fetch_ddg_news(query: str, max_results: int = 20) -> list[dict]:
 # ---------------------------------------------------------------------------
 # MCP Tool
 # ---------------------------------------------------------------------------
+@mcp.tool()
+async def fetch_article_content(url: str) -> str:
+    """
+    Fetch and extract full text content from a specific article URL.
+    Use this when you already have the URL and want the full article text.
+    No search performed — fetches directly from the URL.
+
+    :param url: The direct article URL to fetch content from
+    """
+    if not url.strip():
+        raise ValueError("'url' cannot be empty.")
+
+    content = await _fetch_full_content(url)
+    return content
 
 @mcp.tool()
 async def fetch_news(query: str, max_results: int = 20, full_content: bool = False) -> str:
