@@ -27,7 +27,7 @@ import asyncio
 import os
 import sys
 from datetime import datetime
-
+import json
 import httpx
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
@@ -123,27 +123,35 @@ def _build_keyboard(article_id: int) -> dict:
 
 @mcp.tool()
 async def send_alert(
-    article: dict,
-    urgency: int,
-    reasoning: str,
-    article_id: int,
-    connected_to: list = None,
+    article     : str,         # JSON string — MCP tools pass primitives only
+    urgency     : int,
+    reasoning   : str,
+    article_id  : int,
+    connected_to: str = "[]",  # JSON string list
 ) -> str:
     """
     Send a formatted news alert with inline ✅ ❌ 🚫 feedback buttons.
     Button taps are readable via get_callbacks tool.
 
-    :param article: Dict with title, url, summary, source, published_at
+    :param article: JSON string with title, url, summary, source, published_at
     :param urgency: Score 1–5
     :param reasoning: Why this matters to the user (from sequential thinking)
     :param article_id: SQLite article row ID — links button tap back to article
-    :param connected_to: Optional list of connected past articles [{title, published_at}]
+    :param connected_to: JSON string list of connected past articles [{title, published_at}]
     """
     if not CHAT_ID:
         raise RuntimeError("TELEGRAM_CHAT_ID not set.")
 
+    # Safely parse — handle both str and already-parsed dict/list
+    if isinstance(article, str):
+        article = json.loads(article)
+    if isinstance(connected_to, str):
+        connected_to = json.loads(connected_to)
+    if not isinstance(connected_to, list):
+        connected_to = []
+
     urgency  = max(1, min(5, int(urgency)))
-    text     = _build_alert_text(article, urgency, reasoning, connected_to or [])
+    text     = _build_alert_text(article, urgency, reasoning, connected_to)
     keyboard = _build_keyboard(article_id)
 
     await asyncio.to_thread(_post_sync, "sendMessage", {
@@ -216,7 +224,6 @@ async def get_callbacks(limit: int = 10) -> str:
     """
     Poll for inline button taps (callback queries) from feedback buttons.
     Auto-acknowledges each tap so Telegram removes the loading spinner.
-    Silently skips expired acknowledgements (Telegram gives only ~60s to ack).
     Auto-deduplicates — only returns taps since last call.
 
     Returns one line per tap:
@@ -257,18 +264,16 @@ async def get_callbacks(limit: int = 10) -> str:
 
         signal, article_id = callback_data.split(":", 1)
 
-        # Acknowledge the button tap — removes the spinner in Telegram
-        # Wrapped in try/except because Telegram only allows ~60s to ack.
-        # After that it returns 400. The callback data is still valid,
-        # so we continue processing even if ack fails.
+        # Acknowledge immediately — removes spinner from button.
+        # Telegram only allows ~60s to ack — after that it returns 400.
+        # The callback data is still valid so we always continue processing.
         try:
             await asyncio.to_thread(_post_sync, "answerCallbackQuery", {
                 "callback_query_id": callback_id,
                 "text": f"Marked as: {signal}",
             })
         except Exception:
-            # Expired callback ID — safe to ignore, data is still usable
-            pass
+            pass  # expired callback ID — safe to ignore
 
         lines.append(
             f"signal={signal}  article_id={article_id}  "
@@ -276,6 +281,7 @@ async def get_callbacks(limit: int = 10) -> str:
         )
 
     return "\n".join(lines) if lines else "No callbacks found."
+
 
 @mcp.tool()
 async def get_chat_id() -> str:

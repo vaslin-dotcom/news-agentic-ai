@@ -238,4 +238,5 @@ def delete(collection: str, doc_id: str):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    import uvicorn
+    uvicorn.run(mcp.streamable_http_app(), host="127.0.0.1", port=8001, log_level="info")

@@ -95,7 +95,7 @@ async def _fetch(state: NewsState) -> dict:
         try:
             raw      = await tools["fetch_news"].ainvoke({
                 "query":       query,
-                "max_results": 20,
+                "max_results": 1,                                                                   #20
             })
             text     = _unwrap(raw)
             articles = _parse_ddg_response(text)
@@ -149,14 +149,7 @@ def fetch_news_node(state: NewsState) -> dict:
 # ── Test block ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    sample_queries = [
-        "Infosys layoffs 2026",
-        "LangGraph new features 2026",
-        "IPL 2026 schedule",
-        "RAG systems latest research",
-        "Mysore tech jobs 2026",
-        "Tamil cinema new releases 2026",
-    ]
+    sample_queries =  ['Infosys Mysore campus news 2026', 'Infosys layoffs 2026', 'Infosys AI strategy 2026', 'AI ML Engineer salary India 2026', 'AI ML Engineer demand Bangalore 2026', 'IT services AI market 2026', 'Mysore tech startups 2026', 'LangGraph 0.3 release 2026', 'LangChain new features 2026', 'RAG pipelines latest tools 2026', 'Telegram bots API update 2026', 'OCR Python libraries 2026', 'Raspberry Pi 5 projects 2026', 'Spiking Neural Networks breakthrough 2026', 'multi-agent systems research 2026', 'real-time inference edge AI 2026', 'conversational AI startups India 2026', 'assistive hardware AI 2026', 'neuromorphic computing Intel 2026', 'autonomous agents frameworks 2026', 'IPL 2026 schedule', 'India cricket fixtures 2026', 'Tamil movies 2026 releases', 'Malayalam films 2026', 'Telugu cinema 2026', 'Mysore local events 2026', 'Karnataka state news 2026', 'AI ML jobs Mysore 2026', 'AI certifications India 2026', 'AI conferences Bangalore 2026', 'startup funding AI agents 2026', 'RAG systems production deployment 2026', 'voice AI agents India 2026', 'edge AI Raspberry Pi 2026', 'FastAPI latest update 2026', 'Pandas 3.0 release 2026']
 
     result = fetch_news_node({
         "profile"          : {"news_exclusions": ["gossips"]},
@@ -168,6 +161,10 @@ if __name__ == "__main__":
         "alert_articles"   : [],
         "errors"           : [],
     })
+
+    print('='*25,'RESULTS','='*25)
+    print(result)
+    print('='*50)
 
     articles = result["raw_articles"]
     print(f"\n{'═' * 60}")

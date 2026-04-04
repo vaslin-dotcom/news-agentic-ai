@@ -18,9 +18,8 @@ MCP_SERVERS = {
         "transport": "stdio"
     },
     "chroma": {
-        "command": "python",
-        "args": ["../../mcp/chroma.py"],
-        "transport": "stdio"
+        "url"      : "http://localhost:8001/mcp/",
+        "transport": "streamable_http"  # ← change transport too
     }
 }
 
@@ -103,6 +102,10 @@ if __name__ == "__main__":
         "alert_articles"   : [],
         "errors"           : [],
     })
+
+    print('='*25,'RESULTS','='*25)
+    print(result)
+    print('='*50)
 
     print("\n" + "═" * 60)
     print("  PROFILE (SQLite)")

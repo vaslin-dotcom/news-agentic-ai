@@ -3,6 +3,7 @@ save_node.py
 ------------
 Saves all scored articles to SQLite.
 Saves alerts for urgency >= 3.
+Stores article_id back onto each article dict for alert_node.
 """
 
 import json
@@ -20,8 +21,16 @@ MCP_SERVERS = {
 
 
 def _unwrap(raw) -> str:
-    item = raw[0] if isinstance(raw, list) else raw
-    return item["text"] if isinstance(item, dict) else item.text
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, list):
+        item = raw[0]
+        if isinstance(item, dict):
+            return item.get("text") or item.get("content") or str(item)
+        return str(item)
+    if hasattr(raw, "text"):
+        return raw.text
+    return str(raw)
 
 
 async def _save(state: NewsState) -> dict:
@@ -43,16 +52,14 @@ async def _save(state: NewsState) -> dict:
                 "relevance_score": float(article.get("relevance_score", 0.0)),
                 "urgency"        : int(article.get("urgency", 1)),
                 "reasoning"      : article.get("reasoning", ""),
-                "embedding_id"   : article.get("url", ""),  # url as embedding ref
+                "embedding_id"   : article.get("url", ""),
             })
-            result = json.loads(_unwrap(raw))
 
-            # store article_id back on the article for alert_node
+            result = json.loads(_unwrap(raw))
             article["article_id"] = result.get("article_id")
             status = result.get("status", "?")
-            print(f"  [{status}] {article.get('title', '')[:60]}")
+            print(f"  [{status}] id={article['article_id']}  {article.get('title', '')[:55]}")
 
-            # save alert if urgency >= 3
             if article.get("urgency", 1) >= 3 and status == "saved":
                 await tools["save_alert"].ainvoke({
                     "article_id": article["article_id"],
@@ -63,6 +70,7 @@ async def _save(state: NewsState) -> dict:
 
         except Exception as e:
             print(f"  ⚠ Save failed for '{article.get('title', '')[:40]}': {e}")
+            article["article_id"] = None
 
     return {"scored_articles": articles}
 
@@ -70,8 +78,6 @@ async def _save(state: NewsState) -> dict:
 def save_node(state: NewsState) -> dict:
     return asyncio.run(_save(state))
 
-
-# ── Test block ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     sample = [
@@ -83,7 +89,7 @@ if __name__ == "__main__":
             "published_at"   : "2026-03-21T11:23:00+00:00",
             "relevance_score": 0.85,
             "urgency"        : 4,
-            "reasoning"      : "As an early-career AI/ML Engineer at Infosys, this directly affects career planning.",
+            "reasoning"      : "Directly affects career planning.",
             "connected_to"   : [],
         },
         {
@@ -94,20 +100,15 @@ if __name__ == "__main__":
             "published_at"   : "2026-03-31T08:12:46+00:00",
             "relevance_score": 0.0,
             "urgency"        : 1,
-            "reasoning"      : "Routine IPL schedule, low urgency.",
+            "reasoning"      : "Routine IPL schedule.",
             "connected_to"   : [],
         },
     ]
 
     result = save_node({
-        "profile"          : {},
-        "profile_chunks"   : [],
-        "search_queries"   : [],
-        "raw_articles"     : [],
-        "filtered_articles": [],
-        "scored_articles"  : sample,
-        "alert_articles"   : [],
-        "errors"           : [],
+        "profile": {}, "profile_chunks": [], "search_queries": [],
+        "raw_articles": [], "filtered_articles": [],
+        "scored_articles": sample, "alert_articles": [], "errors": [],
     })
 
     print("\n  article_ids assigned:")

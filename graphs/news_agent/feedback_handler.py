@@ -36,9 +36,8 @@ MCP_SERVERS = {
         "transport": "stdio",
     },
     "chroma": {
-        "command":   "python",
-        "args":      ["../../mcp/chroma.py"],
-        "transport": "stdio",
+        "url"      : "http://localhost:8001/mcp/",
+        "transport": "streamable_http"  # ← change transport too
     },
 }
 

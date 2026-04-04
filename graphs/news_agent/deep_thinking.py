@@ -2,16 +2,16 @@
 deep_reasoning_node.py
 ----------------------
 Deep reasoning node using Sequential Thinking MCP.
-Processes ONE article at a time with full sequential reasoning.
+Parallel processing with semaphore — max 3 articles concurrently.
 For each article:
-  1. Fetch full article content via DDG MCP
-  2. Fetch past connected articles from Chroma + SQLite
-  3. Run sequential thinking chain to assess personal impact
-  4. Output urgency (1-5), relevance_score, reasoning, connected_to
+  1. Fetch full article content directly from URL
+  2. Run sequential thinking chain to assess personal impact
+  3. Output urgency (1-5), relevance_score, reasoning, connected_to
 """
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+
 import json
 import asyncio
 import re
@@ -23,26 +23,27 @@ from state import NewsState
 
 MCP_SERVERS = {
     "sequential-thinking": {
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+        "command"  : "npx",
+        "args"     : ["-y", "@modelcontextprotocol/server-sequential-thinking"],
         "transport": "stdio",
     },
     "chroma": {
-        "command": "python",
-        "args": ["../../mcp/chroma.py"],
-        "transport": "stdio"
+        "url"      : "http://localhost:8001/mcp/",
+        "transport": "streamable_http"
     },
     "sqlite": {
-        "command": "python",
-        "args": ["../../mcp/sqlite.py"],
+        "command"  : "python",
+        "args"     : ["../../mcp/sqlite.py"],
         "transport": "stdio"
     },
     "ddg": {
-        "command": "python",
-        "args": ["../../mcp/ddg.py"],
+        "command"  : "python",
+        "args"     : ["../../mcp/ddg.py"],
         "transport": "stdio"
     }
 }
+
+CONCURRENT_LIMIT = 3  # max articles reasoned simultaneously
 
 SYSTEM_PROMPT = """
 You are a personal news analyst. Your job is to deeply assess how a news article
@@ -201,57 +202,35 @@ def _extract_verdict(content: str) -> dict:
         "connected_to"   : []
     }
 
-
-async def _reason(state: NewsState) -> dict:
-    articles = state["filtered_articles"]
-    profile  = state["profile"]
-
-    # load all tools once
-    client     = MultiServerMCPClient(MCP_SERVERS)
-    tools      = await client.get_tools()
-    tools_dict = {t.name: t for t in tools}
-
-    # build agent with all tools
-    smart_llm = get_llm(mode="think")
-    agent     = create_react_agent(
-        smart_llm.primary.bind_tools(tools), tools, prompt=SYSTEM_PROMPT
-    )
-
-    scored_articles = []
-    print(f"\n  Deep reasoning on {len(articles)} articles...")
-
-    for i, article in enumerate(articles, 1):
+async def _reason_article(
+    semaphore  : asyncio.Semaphore,
+    agent,
+    tools_dict : dict,
+    article    : dict,
+    profile    : dict,
+    index      : int,
+    total      : int,
+) -> dict:
+    """
+    Reason about a single article.
+    Semaphore limits max concurrent executions to CONCURRENT_LIMIT.
+    """
+    async with semaphore:
         title = article.get("title", "")[:60]
-        print(f"\n  [{i}/{len(articles)}] {title}")
+        print(f"\n  [{index}/{total}] START  {title}")
 
-        # # ── Step 1: fetch full article content ────────────────
-        # full_content = ""
-        # try:
-        #     raw      = await tools_dict["fetch_news"].ainvoke({
-        #         "query"       : article.get("title", ""),
-        #         "max_results" : 1,
-        #         "full_content": True,
-        #     })
-        #     text     = _unwrap(raw)
-        #     fc_match = re.search(r"Full Content:\s*(.+)", text, re.DOTALL)
-        #     if fc_match:
-        #         full_content = fc_match.group(1).strip()
-        #     print(f"    ✓ Full content: {len(full_content)} chars")
-        # except Exception as e:
-        #     print(f"    ⚠ Full content fetch failed: {e}")
-
-        # Step 1: fetch full article content directly from URL
+        # ── Step 1: fetch full content from URL ───────────────
         full_content = ""
         try:
-            raw = await tools_dict["fetch_article_content"].ainvoke({
+            raw          = await tools_dict["fetch_article_content"].ainvoke({
                 "url": article.get("url", "")
             })
             full_content = _unwrap(raw)
-            print(f"    ✓ Full content: {len(full_content)} chars")
+            print(f"    [{index}] ✓ Content: {len(full_content)} chars")
         except Exception as e:
-            print(f"    ⚠ Full content fetch failed: {e}")
+            print(f"    [{index}] ⚠ Content fetch failed: {e}")
 
-        # ── Step 2: run sequential thinking ───────────────────
+        # ── Step 2: sequential thinking ───────────────────────
         prompt = _build_prompt(article, profile, full_content)
 
         try:
@@ -261,7 +240,7 @@ async def _reason(state: NewsState) -> dict:
             response = result["messages"][-1].content
             verdict  = _extract_verdict(response)
         except Exception as e:
-            print(f"    ⚠ Reasoning failed: {e}")
+            print(f"    [{index}] ⚠ Reasoning failed: {e}")
             verdict = {
                 "relevance_score": 0.3,
                 "urgency"        : 1,
@@ -269,20 +248,71 @@ async def _reason(state: NewsState) -> dict:
                 "connected_to"   : []
             }
 
-        scored_articles.append({
+        print(f"    [{index}] DONE  urgency={verdict.get('urgency')}/5  "
+              f"score={verdict.get('relevance_score')}  "
+              f"→ {verdict.get('reasoning', '')[:60]}")
+
+        return {
             **article,
-            "full_content"   : full_content[:500],  # store snippet only
+            "full_content"   : full_content[:500],
             "relevance_score": verdict.get("relevance_score", 0.3),
             "urgency"        : verdict.get("urgency", 1),
             "reasoning"      : verdict.get("reasoning", ""),
             "connected_to"   : verdict.get("connected_to", []),
-        })
+        }
 
-        print(f"    urgency={verdict.get('urgency')}/5  "
-              f"score={verdict.get('relevance_score')}  "
-              f"→ {verdict.get('reasoning', '')[:80]}")
+
+async def _reason(state: NewsState) -> dict:
+    articles = state["filtered_articles"]
+    profile  = state["profile"]
+
+    client     = MultiServerMCPClient(MCP_SERVERS)
+    tools      = await client.get_tools()
+    tools_dict = {t.name: t for t in tools}
+
+    smart_llm = get_llm(mode="think")
+    agent     = create_react_agent(
+        smart_llm.primary.bind_tools(tools), tools, prompt=SYSTEM_PROMPT
+    )
+
+    print(f"\n  Deep reasoning on {len(articles)} articles "
+          f"(max {CONCURRENT_LIMIT} concurrent)...")
+
+    semaphore = asyncio.Semaphore(CONCURRENT_LIMIT)
+
+    # launch all articles concurrently — semaphore caps active ones at 3
+    tasks = [
+        _reason_article(
+            semaphore, agent, tools_dict,
+            article, profile, i, len(articles)
+        )
+        for i, article in enumerate(articles, 1)
+    ]
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # collect results — preserve original article on failure
+    scored_articles = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            print(f"  ⚠ Article {i+1} failed: {result}")
+            scored_articles.append({
+                **articles[i],
+                "full_content"   : "",
+                "relevance_score": 0.3,
+                "urgency"        : 1,
+                "reasoning"      : "Processing failed.",
+                "connected_to"   : [],
+            })
+        else:
+            scored_articles.append(result)
+
+    urgent = sum(1 for a in scored_articles if a.get("urgency", 1) >= 3)
+    print(f"\n  Scored   : {len(scored_articles)}")
+    print(f"  Urgent   : {urgent} (urgency >= 3)")
 
     return {"scored_articles": scored_articles}
+
 
 
 def deep_reasoning_node(state: NewsState) -> dict:

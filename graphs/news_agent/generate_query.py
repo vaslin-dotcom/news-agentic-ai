@@ -16,11 +16,11 @@ import re
 from llm import get_llm
 from state import NewsState
 
-
+#generate as many specific DuckDuckGo search
 SYSTEM_PROMPT = """
 You are a news query generator for a personalised news system.
 
-Given a person's full profile, generate as many specific DuckDuckGo search
+Given a person's full profile, generate 2 DuckDuckGo search                
 queries as needed to collect ALL current news relevant to every dimension
 of their life.
 
@@ -103,27 +103,7 @@ Generate queries covering every dimension of their life.
 if __name__ == "__main__":
     # reuse the profile from Node 1 output
     print("Generating......")
-    sample_profile = {
-        "name": "ANTONY VASLIN",
-        "job": "AI/ML Engineer",
-        "company": "Infosys",
-        "industry": "IT services",
-        "location": "Mysore",
-        "locality": "infosys campus",
-        "tech_stack": ["Python", "LangGraph", "LangChain", "RAG", "Telegram API",
-                       "OCR", "Raspberry Pi", "Spiking Neural Networks", "FastAPI", "Pandas"],
-        "skills": ["Python", "LangGraph", "LangChain", "RAG pipelines", "Telegram bots",
-                   "OCR", "Raspberry Pi", "Spiking Neural Networks", "multi-agent systems",
-                   "real-time inference"],
-        "interests": ["conversational AI", "assistive hardware", "neuromorphic computing",
-                      "autonomous agents", "career-tech fusion"],
-        "personal_interests": ["cricket", "movies of other languages with subtitles"],
-        "languages_spoken": ["tamil", "english", "malayalam", "telugu"],
-        "goals": "Building production-grade AI agents and RAG systems that interact naturally across voice, text and hardware.",
-        "lifestyle_context": "system engineer trainee, trained in oracle 21c but not interested, building own projects",
-        "news_exclusions": ["gossips"],
-        "news_reading_time": "morning",
-    }
+    sample_profile = {'profile': {'name': 'ANTONY VASLIN', 'location': 'Mysore', 'skills': ['Python', 'LangGraph', 'LangChain', 'RAG pipelines', 'Telegram bots', 'OCR', 'Raspberry Pi', 'Spiking Neural Networks', 'multi-agent systems', 'real-time inference'], 'goals': 'Building production-grade AI agents and RAG systems that interact naturally across voice, text and hardware.', 'company': 'Infosys', 'interests': ['conversational AI', 'assistive hardware', 'neuromorphic computing', 'autonomous agents', 'career-tech fusion'], 'tech_stack': ['Python', 'LangGraph', 'LangChain', 'RAG', 'Telegram API', 'OCR', 'Raspberry Pi', 'Spiking Neural Networks', 'FastAPI', 'Pandas'], 'professional_context': 'Early-career AI/ML Engineer at Infosys in Mysore who has spent the last 18 months rapidly prototyping intelligent systems—ranging from voice-enabled RAG chatbots and multi-agent debaters to Raspberry-Pi smart glasses and neuromorphic drowsiness detection—showcasing a clear focus on conversational AI, retrieval-augmented generation and edge inference.', 'github_username': 'vaslin-dotcom', 'job': 'AI/ML Engineer', 'industry': 'IT services', 'locality': 'infosys campus', 'daily_habits': 'morning tv news while stretching, push-ups, sit-ups; youtube during breakfast, lunch, dinner; 1 hr weight training with resistance band at night', 'news_reading_time': 'morning', 'lifestyle_context': 'system engineer trainee, trained in oracle 21c but not interested, building own projects', 'languages_spoken': ['tamil', 'english', 'malayalam', 'telugu'], 'news_exclusions': ['gossips'], 'personal_interests': ['cricket', 'movies of other languages with subtitles']}, 'profile_chunks': [{'id': 'vaslin-dotcom:interests', 'similarity': -0.271, 'document': 'Interests: conversational AI, assistive hardware, neuromorphic computing, autonomous agents, career-tech fusion', 'metadata': {'updated_at': '2026-04-02T07:59:50.775836', 'username': 'vaslin-dotcom', 'type': 'interests'}}, {'id': 'vaslin-dotcom:lifestyle', 'similarity': -0.4399, 'document': 'infosys campus, morning tv news while stretching, push-ups, sit-ups; youtube during breakfast, lunch, dinner; 1 hr weight training with resistance ban', 'metadata': {'type': 'lifestyle', 'username': 'vaslin-dotcom', 'updated_at': '2026-04-02T08:05:32.476852'}}, {'id': 'vaslin-dotcom:exclusions', 'similarity': -0.6443, 'document': 'Avoid these topics in news: gossips', 'metadata': {'username': 'vaslin-dotcom', 'updated_at': '2026-04-02T08:05:32.476852', 'type': 'exclusions'}}, {'id': 'vaslin-dotcom:professional', 'similarity': -0.6875, 'document': 'AI/ML Engineer with expertise in Python, LangGraph, LangChain, RAG pipelines, Telegram bots, OCR, Raspberry Pi, Spiking Neural Networks, multi-agent s', 'metadata': {'type': 'professional', 'username': 'vaslin-dotcom', 'updated_at': '2026-04-02T07:59:50.775836'}}, {'id': 'vaslin-dotcom:company', 'similarity': -0.7188, 'document': 'Infosys IT services Early-career AI/ML Engineer at Infosys in Mysore who has spent the last 18 months rapidly prototyping intelligent systems—ranging ', 'metadata': {'updated_at': '2026-04-02T07:59:50.775836', 'username': 'vaslin-dotcom', 'type': 'company'}}, {'id': 'vaslin-dotcom:goals', 'similarity': -0.7348, 'document': 'Building production-grade AI agents and RAG systems that interact naturally across voice, text and hardware', 'metadata': {'type': 'goals', 'updated_at': '2026-04-02T07:59:50.775836', 'username': 'vaslin-dotcom'}}, {'id': 'vaslin-dotcom:personal', 'similarity': -1.0194, 'document': 'cricket, movies of other languages with subtitles', 'metadata': {'type': 'personal', 'username': 'vaslin-dotcom', 'updated_at': '2026-04-02T08:05:32.476852'}}]}
 
     result = generate_queries_node({
         "profile"          : sample_profile,
@@ -135,6 +115,10 @@ if __name__ == "__main__":
         "alert_articles"   : [],
         "errors"           : [],
     })
+
+    print('='*25,'RESULTS','='*25)
+    print(result)
+    print('='*50)
 
     queries = result["search_queries"]
     print(f"\n{'═' * 60}")
