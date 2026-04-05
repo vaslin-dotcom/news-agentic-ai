@@ -89,20 +89,22 @@ async def _fetch(state: NewsState) -> dict:
     # ── Step 1: fetch news for ALL queries via DDG MCP ────────────
     print(f"\n  Fetching news for {len(queries)} queries...")
     seen_urls = {}   # url → article dict
-
+    seen_titles = set()
     for i, query in enumerate(queries, 1):
         print(f"  [{i}/{len(queries)}] {query}")
         try:
             raw      = await tools["fetch_news"].ainvoke({
                 "query":       query,
-                "max_results": 1,                                                                   #20
+                "max_results": 15,                                                                   #20
             })
             text     = _unwrap(raw)
             articles = _parse_ddg_response(text)
             for art in articles:
                 url = art.get("url", "").strip()
-                if url and url not in seen_urls:
+                title = art.get("title", "").strip().lower()
+                if url and url not in seen_urls and title not in seen_titles:
                     seen_urls[url] = art
+                    seen_titles.add(title)
         except Exception as e:
             print(f"    ⚠ DDG error for '{query}': {e}")
 

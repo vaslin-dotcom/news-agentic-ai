@@ -29,9 +29,8 @@ MCP_SERVERS = {
         "transport": "stdio"
     },
     "chroma": {
-        "command": sys.executable,
-        "args": [str(MCP_SCRIPTS["chroma"])],
-        "transport": "stdio"
+        "url"      : "http://localhost:8001/mcp/",
+        "transport": "streamable_http"  # ← change transport too
     }
 }
 
