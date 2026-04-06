@@ -78,7 +78,7 @@
 ║    Returns: title, url, summary, source, published_at                        ║
 ║                                                                              ║
 ║  After all queries complete:                                                 ║
-║    Deduplicate by URL across all query results                               ║
+║    Deduplicate by URL and topic across all query results                               ║
 ║                                                                              ║
 ║  For each unique URL:                                                        ║
 ║    SQLite → url_exists(url)                                                  ║
