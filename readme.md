@@ -158,22 +158,7 @@ The system self-corrects without any manual tuning. Only improves. Never degrade
 
 ---
 
-## LLM Stack — SmartLLM
 
-The system uses a custom `SmartLLM` wrapper with automatic fallback across three models:
-
-```
-Primary  → NVIDIA NIM (think or generation model)
-   ↓ rate limit / 503
-Alt      → Groq primary model
-   ↓ rate limit
-Fallback → Groq alt model
-   ↓ all fail → wait 30s → retry
-```
-
-Two modes: `think` (for reasoning-heavy nodes) and `generation` (for structured output nodes).
-
----
 
 ## Project Structure
 
@@ -257,14 +242,6 @@ NVIDIA_BASE_URL  = "https://integrate.api.nvidia.com/v1"
 NVIDIA_THINK_MODEL = "nvidia/llama-3.1-nemotron-ultra-253b-v1"
 NVIDIA_GEN_MODEL   = "meta/llama-3.3-70b-instruct"
 
-# Groq fallback
-GROQ_API_KEY   = "your-groq-key"
-GROQ_BASE_URL  = "https://api.groq.com/openai/v1"
-THINK_MODEL    = "deepseek-r1-distill-llama-70b"
-THINK_MODEL_ALT    = "llama-3.3-70b-versatile"
-GENERATION_MODEL     = "llama-3.3-70b-versatile"
-GENERATION_MODEL_ALT = "mixtral-8x7b-32768"
-
 # Telegram
 TELEGRAM_BOT_TOKEN = "your-bot-token"
 TELEGRAM_CHAT_ID   = "your-chat-id"
@@ -287,10 +264,15 @@ cd graphs/news_collector
 python graph.py
 ```
 
-**Step 3 — Start the feedback handler (in a separate terminal):**
+**Step 3 — Start the feedback handler and chroma MCP (in a separate terminal):**
 ```bash
 cd graphs/news_collector
 python feedback_handler.py
+
+and
+
+cd mcp
+python chroma.py
 ```
 
 Schedule `graph.py` to run every morning via Task Scheduler (Windows) or cron (Linux/Mac).
