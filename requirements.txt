@@ -1,1 +1,30 @@
 npx -y @modelcontextprotocol/server-sequential-thinking
+# ── LLM & LangChain ────────────────────────────────────────────────────────
+langchain-core
+langchain-openai
+langchain-mcp-adapters
+langgraph
+openai
+
+# ── MCP ────────────────────────────────────────────────────────────────────
+mcp
+
+# ── Vector DB ──────────────────────────────────────────────────────────────
+chromadb
+sentence-transformers
+
+# ── News fetching ──────────────────────────────────────────────────────────
+duckduckgo-search
+httpx
+beautifulsoup4
+feedparser
+
+# ── Telegram ───────────────────────────────────────────────────────────────
+python-telegram-bot
+
+# ── Utilities ──────────────────────────────────────────────────────────────
+python-dotenv
+typing-extensions
+
+# ── Scheduling ─────────────────────────────────────────────────────────────
+apscheduler
