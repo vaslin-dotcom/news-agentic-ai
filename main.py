@@ -13,10 +13,16 @@ def run_news_workflow():
     logger.info("Starting scheduled news collection task...")
     try:
         # Define the initial state for your graph
-        initial_state = {
-            "messages": [("user", "Collect and summarize today's top news.")],
-            # Add other state keys your graph requires here
-        }
+       initial_state = app.invoke({
+        "username":        'vaslin-dotcom',
+        "github_raw":      {},
+        "profile_fields":  {},
+        "chat_fields":     {},
+        "chat_history":    [],
+        "profile_complete": False,
+        "chroma_ids":      [],
+        "errors":          [],
+    })
         
         # Execute the graph
         result = graph.invoke(initial_state)
